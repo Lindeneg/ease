@@ -1,31 +1,49 @@
 // Shared compiler utilities — reusable across pipeline stages.
 
 const JS_KEYWORDS = new Set([
-  "true", "false", "null", "undefined",
-  "typeof", "instanceof", "new", "in", "of",
-  "this", "void", "delete", "throw",
-  "await", "async", "yield",
+    "true",
+    "false",
+    "null",
+    "undefined",
+    "typeof",
+    "instanceof",
+    "new",
+    "in",
+    "of",
+    "this",
+    "void",
+    "delete",
+    "throw",
+    "await",
+    "async",
+    "yield",
 ]);
 
 /**
  * Check whether a character is a valid JS identifier start (letter, `_`, or `$`).
  */
 function isIdentStart(ch: string): boolean {
-  const c = ch.charCodeAt(0);
-  return (c >= 65 && c <= 90)   // A-Z
-      || (c >= 97 && c <= 122)  // a-z
-      || c === 95 || c === 36;  // _ $
+    const c = ch.charCodeAt(0);
+    return (
+        (c >= 65 && c <= 90) || // A-Z
+        (c >= 97 && c <= 122) || // a-z
+        c === 95 ||
+        c === 36
+    ); // _ $
 }
 
 /**
  * Check whether a character can continue a JS identifier (letter, digit, `_`, or `$`).
  */
 function isIdentChar(ch: string): boolean {
-  const c = ch.charCodeAt(0);
-  return (c >= 65 && c <= 90)   // A-Z
-      || (c >= 97 && c <= 122)  // a-z
-      || (c >= 48 && c <= 57)   // 0-9
-      || c === 95 || c === 36;  // _ $
+    const c = ch.charCodeAt(0);
+    return (
+        (c >= 65 && c <= 90) || // A-Z
+        (c >= 97 && c <= 122) || // a-z
+        (c >= 48 && c <= 57) || // 0-9
+        c === 95 ||
+        c === 36
+    ); // _ $
 }
 
 /**
@@ -42,54 +60,54 @@ function isIdentChar(ch: string): boolean {
  * - `'"hello " + name'` → `["name"]`
  */
 export function extractIdentifiers(expression: string): string[] {
-  const seen = new Set<string>();
-  let i = 0;
-  let afterDot = false;
+    const seen = new Set<string>();
+    let i = 0;
+    let afterDot = false;
 
-  while (i < expression.length) {
-    const ch = expression[i];
+    while (i < expression.length) {
+        const ch = expression[i];
 
-    // Skip string literals
-    if (ch === '"' || ch === "'" || ch === "`") {
-      i = skipString(expression, i);
-      afterDot = false;
-      continue;
-    }
-
-    // Track dot access — next identifier is a property, not a root reference
-    if (ch === ".") {
-      afterDot = true;
-      i++;
-      continue;
-    }
-
-    // Identifier
-    if (isIdentStart(ch)) {
-      const start = i;
-      while (i < expression.length && isIdentChar(expression[i])) i++;
-      if (!afterDot) {
-        const name = expression.slice(start, i);
-        if (!JS_KEYWORDS.has(name)) {
-          seen.add(name);
+        // Skip string literals
+        if (ch === '"' || ch === "'" || ch === "`") {
+            i = skipString(expression, i);
+            afterDot = false;
+            continue;
         }
-      }
-      afterDot = false;
-      continue;
+
+        // Track dot access — next identifier is a property, not a root reference
+        if (ch === ".") {
+            afterDot = true;
+            i++;
+            continue;
+        }
+
+        // Identifier
+        if (isIdentStart(ch)) {
+            const start = i;
+            while (i < expression.length && isIdentChar(expression[i])) i++;
+            if (!afterDot) {
+                const name = expression.slice(start, i);
+                if (!JS_KEYWORDS.has(name)) {
+                    seen.add(name);
+                }
+            }
+            afterDot = false;
+            continue;
+        }
+
+        // Digits — skip number literals, don't let them trigger identifier logic
+        if (ch >= "0" && ch <= "9") {
+            while (i < expression.length && isIdentChar(expression[i])) i++;
+            afterDot = false;
+            continue;
+        }
+
+        // Any other character — reset afterDot
+        afterDot = false;
+        i++;
     }
 
-    // Digits — skip number literals, don't let them trigger identifier logic
-    if (ch >= "0" && ch <= "9") {
-      while (i < expression.length && isIdentChar(expression[i])) i++;
-      afterDot = false;
-      continue;
-    }
-
-    // Any other character — reset afterDot
-    afterDot = false;
-    i++;
-  }
-
-  return [...seen];
+    return [...seen];
 }
 
 /**
@@ -98,27 +116,27 @@ export function extractIdentifiers(expression: string): string[] {
  * Returns the position after the closing quote.
  */
 function skipString(source: string, pos: number): number {
-  const quote = source[pos];
-  pos++;
-  while (pos < source.length) {
-    if (source[pos] === "\\") {
-      pos += 2; // skip escaped character
-      continue;
-    }
-    if (source[pos] === quote) {
-      return pos + 1;
-    }
+    const quote = source[pos];
     pos++;
-  }
-  return pos; // unterminated string — return end
+    while (pos < source.length) {
+        if (source[pos] === "\\") {
+            pos += 2; // skip escaped character
+            continue;
+        }
+        if (source[pos] === quote) {
+            return pos + 1;
+        }
+        pos++;
+    }
+    return pos; // unterminated string — return end
 }
 
 /** Parsed result of an `@each` directive expression. */
 export interface EachExpression {
-  /** The loop variable name, e.g. "item" in `item in items` */
-  variable: string;
-  /** The iterable expression, e.g. "items" or "obj.list" */
-  iterable: string;
+    /** The loop variable name, e.g. "item" in `item in items` */
+    variable: string;
+    /** The iterable expression, e.g. "items" or "obj.list" */
+    iterable: string;
 }
 
 /**
@@ -128,24 +146,36 @@ export interface EachExpression {
  * expression doesn't match the expected `variable in expression` pattern.
  */
 export function parseEachExpression(expr: string): EachExpression | null {
-  const trimmed = expr.trim();
+    const trimmed = expr.trim();
 
-  // Find the loop variable (must be a simple identifier)
-  let i = 0;
-  while (i < trimmed.length && isIdentChar(trimmed[i])) i++;
-  if (i === 0) return null;
-  const variable = trimmed.slice(0, i);
+    // Find the loop variable (must be a simple identifier)
+    let i = 0;
+    while (i < trimmed.length && isIdentChar(trimmed[i])) i++;
+    if (i === 0) return null;
+    const variable = trimmed.slice(0, i);
 
-  // Expect whitespace + "in" + whitespace
-  if (i >= trimmed.length || trimmed[i] !== " ") return null;
-  while (i < trimmed.length && trimmed[i] === " ") i++;
-  if (!trimmed.startsWith("in", i)) return null;
-  i += 2;
-  if (i >= trimmed.length || trimmed[i] !== " ") return null;
-  while (i < trimmed.length && trimmed[i] === " ") i++;
+    // Expect whitespace + "in" + whitespace
+    if (i >= trimmed.length || trimmed[i] !== " ") return null;
+    while (i < trimmed.length && trimmed[i] === " ") i++;
+    if (!trimmed.startsWith("in", i)) return null;
+    i += 2;
+    if (i >= trimmed.length || trimmed[i] !== " ") return null;
+    while (i < trimmed.length && trimmed[i] === " ") i++;
 
-  const iterable = trimmed.slice(i).trim();
-  if (iterable.length === 0) return null;
+    const iterable = trimmed.slice(i).trim();
+    if (iterable.length === 0) return null;
 
-  return { variable, iterable };
+    return {variable, iterable};
+}
+
+/**
+ * Check whether a tag name represents a component (uppercase first letter)
+ * vs a native HTML element (lowercase).
+ *
+ * Convention: `<Counter>` is a component, `<div>` is native HTML.
+ */
+export function isComponentTag(tag: string): boolean {
+    if (tag.length === 0) return false;
+    const first = tag.charCodeAt(0);
+    return first >= 65 && first <= 90; // A-Z
 }
