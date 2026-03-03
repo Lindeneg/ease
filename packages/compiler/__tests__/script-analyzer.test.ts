@@ -604,3 +604,232 @@ export default {
     expect(d.diagnostics).toHaveLength(0);
   });
 });
+
+// ── Emits extraction ───────────────────────────────────────────
+
+describe("analyzeScript — emits extraction", () => {
+  it("extracts single emit declaration", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: { count: 0 },
+    actions: { increment(state, emit) { state.count++; emit("change", state.count); } },
+    emits: ["change"]
+  };
+});`;
+    const d = ok(analyzeScript(source, null));
+    const s = server(d);
+    expect(s.emits).toHaveLength(1);
+    expect(s.emits[0]).toEqual({ name: "change" });
+  });
+
+  it("extracts multiple emit declarations", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: {},
+    actions: { submit(state, emit) { emit("validate"); emit("submit"); } },
+    emits: ["validate", "submit"]
+  };
+});`;
+    const d = ok(analyzeScript(source, null));
+    const s = server(d);
+    expect(s.emits).toHaveLength(2);
+    expect(s.emits[0].name).toBe("validate");
+    expect(s.emits[1].name).toBe("submit");
+  });
+
+  it("returns empty emits when no emits property", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: { count: 0 },
+    actions: { increment(state) { state.count++; } }
+  };
+});`;
+    const d = ok(analyzeScript(source, null));
+    expect(server(d).emits).toEqual([]);
+  });
+
+  it("allows empty emits array", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: {},
+    actions: {},
+    emits: []
+  };
+});`;
+    const d = ok(analyzeScript(source, null));
+    expect(server(d).emits).toEqual([]);
+  });
+
+  it("E208: emits is not an array", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: {},
+    actions: {},
+    emits: "change"
+  };
+});`;
+    const f = err(analyzeScript(source, null));
+    expect(f.diagnostics.some(d => d.code === AnalyzerDiagnostics.E208)).toBe(true);
+  });
+
+  it("E207: emit name is not a string literal", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: {},
+    actions: {},
+    emits: [42]
+  };
+});`;
+    const f = err(analyzeScript(source, null));
+    expect(f.diagnostics.some(d => d.code === AnalyzerDiagnostics.E207)).toBe(true);
+  });
+});
+
+// ── Action emit parameter detection ────────────────────────────
+
+describe("analyzeScript — action emit parameter", () => {
+  it("detects emit parameter on client action", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: { count: 0 },
+    actions: {
+      increment(state, emit) { state.count++; emit("change", state.count); }
+    },
+    emits: ["change"]
+  };
+});`;
+    const d = ok(analyzeScript(source, null));
+    const action = server(d).actions[0];
+    expect(action.name).toBe("increment");
+    expect(action.kind).toBe("client");
+    expect(action.hasEmit).toBe(true);
+    expect(action.params).toEqual([]);
+  });
+
+  it("detects emit parameter on server action", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: {},
+    actions: {
+      async save(state, ctx, emit) { await ctx.db.save(state); emit("saved"); }
+    },
+    emits: ["saved"]
+  };
+});`;
+    const d = ok(analyzeScript(source, null));
+    const action = server(d).actions[0];
+    expect(action.kind).toBe("server");
+    expect(action.hasEmit).toBe(true);
+    expect(action.params).toEqual([]);
+  });
+
+  it("detects emit + extra params on client action", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: {},
+    actions: {
+      update(state, emit, key, value) { emit("change", key); }
+    },
+    emits: ["change"]
+  };
+});`;
+    const d = ok(analyzeScript(source, null));
+    const action = server(d).actions[0];
+    expect(action.kind).toBe("client");
+    expect(action.hasEmit).toBe(true);
+    expect(action.params).toEqual(["key", "value"]);
+  });
+
+  it("detects emit + extra params on server action", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: {},
+    actions: {
+      async process(state, ctx, emit, itemId) { await ctx.db.process(itemId); emit("processed", itemId); }
+    },
+    emits: ["processed"]
+  };
+});`;
+    const d = ok(analyzeScript(source, null));
+    const action = server(d).actions[0];
+    expect(action.kind).toBe("server");
+    expect(action.hasEmit).toBe(true);
+    expect(action.params).toEqual(["itemId"]);
+  });
+
+  it("no emit parameter = hasEmit false", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: { count: 0 },
+    actions: { increment(state) { state.count++; } }
+  };
+});`;
+    const d = ok(analyzeScript(source, null));
+    expect(server(d).actions[0].hasEmit).toBe(false);
+  });
+});
+
+// ── Emit cross-validation warnings ─────────────────────────────
+
+describe("analyzeScript — emit cross-validation", () => {
+  it("W201: action uses emit but no emits declared", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: {},
+    actions: { fire(state, emit) { emit("boom"); } }
+  };
+});`;
+    const d = ok(analyzeScript(source, null));
+    expect(d.diagnostics.some(diag => diag.code === AnalyzerDiagnostics.W201)).toBe(true);
+  });
+
+  it("W202: emits declared but no action uses emit", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: {},
+    actions: { noop(state) {} },
+    emits: ["change"]
+  };
+});`;
+    const d = ok(analyzeScript(source, null));
+    expect(d.diagnostics.some(diag => diag.code === AnalyzerDiagnostics.W202)).toBe(true);
+  });
+
+  it("no warnings when emits and actions match", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: {},
+    actions: { fire(state, emit) { emit("change"); } },
+    emits: ["change"]
+  };
+});`;
+    const d = ok(analyzeScript(source, null));
+    expect(d.diagnostics).toHaveLength(0);
+  });
+
+  it("no warnings when neither emits nor emit param exist", () => {
+    const source = `
+export default define(function() {
+  return {
+    state: {},
+    actions: { noop(state) {} }
+  };
+});`;
+    const d = ok(analyzeScript(source, null));
+    expect(d.diagnostics).toHaveLength(0);
+  });
+});

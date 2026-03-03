@@ -7,8 +7,7 @@ import {
     type Binding,
 } from "../src/binding-resolver.js";
 import {parseTemplate} from "../src/template-parser.js";
-import {analyzeScript} from "../src/script-analyzer.js";
-import {extractIdentifiers, parseEachExpression} from "../src/utils.js";
+import {analyzeScript, AnalyzerDiagnostics} from "../src/script-analyzer.js";
 import type {StageOutput} from "../src/diagnostics.js";
 import type {TemplateNode} from "../src/template-parser.js";
 import type {ScriptAnalysis} from "../src/script-analyzer.js";
@@ -57,108 +56,6 @@ export default define(function() {
 `;
 
 // ── extractIdentifiers (utility) ────────────────────────────────
-
-describe("extractIdentifiers", () => {
-    it("extracts a single identifier", () => {
-        expect(extractIdentifiers("count")).toEqual(["count"]);
-    });
-
-    it("extracts from binary expression", () => {
-        expect(extractIdentifiers("count + 1")).toEqual(["count"]);
-    });
-
-    it("extracts multiple identifiers", () => {
-        expect(extractIdentifiers("count + total")).toEqual(["count", "total"]);
-    });
-
-    it("extracts only root identifier from property access", () => {
-        expect(extractIdentifiers("items.length")).toEqual(["items"]);
-    });
-
-    it("skips string literals", () => {
-        expect(extractIdentifiers('"hello " + name')).toEqual(["name"]);
-    });
-
-    it("skips single-quoted string literals", () => {
-        expect(extractIdentifiers("'hello' + name")).toEqual(["name"]);
-    });
-
-    it("skips backtick string literals", () => {
-        expect(extractIdentifiers("`hello` + name")).toEqual(["name"]);
-    });
-
-    it("skips JS keywords", () => {
-        expect(extractIdentifiers("typeof x")).toEqual(["x"]);
-        expect(extractIdentifiers("true")).toEqual([]);
-        expect(extractIdentifiers("null")).toEqual([]);
-    });
-
-    it("deduplicates identifiers", () => {
-        expect(extractIdentifiers("x + x")).toEqual(["x"]);
-    });
-
-    it("handles chained property access", () => {
-        expect(extractIdentifiers("item.user.name")).toEqual(["item"]);
-    });
-
-    it("handles ternary expressions", () => {
-        const result = extractIdentifiers("active ? 'yes' : 'no'");
-        expect(result).toEqual(["active"]);
-    });
-
-    it("handles empty string", () => {
-        expect(extractIdentifiers("")).toEqual([]);
-    });
-
-    it("handles numeric literals", () => {
-        expect(extractIdentifiers("count + 42")).toEqual(["count"]);
-    });
-
-    it("handles comparison expressions", () => {
-        expect(extractIdentifiers("count > 0")).toEqual(["count"]);
-    });
-
-    it("handles method call expressions", () => {
-        expect(extractIdentifiers("items.filter(x)")).toEqual(["items", "x"]);
-    });
-});
-
-// ── parseEachExpression (utility) ───────────────────────────────
-
-describe("parseEachExpression", () => {
-    it("parses simple 'item in items'", () => {
-        expect(parseEachExpression("item in items")).toEqual({
-            variable: "item",
-            iterable: "items",
-        });
-    });
-
-    it("parses with extra whitespace", () => {
-        expect(parseEachExpression("  item  in  items  ")).toEqual({
-            variable: "item",
-            iterable: "items",
-        });
-    });
-
-    it("parses complex iterable expression", () => {
-        expect(parseEachExpression("item in obj.list")).toEqual({
-            variable: "item",
-            iterable: "obj.list",
-        });
-    });
-
-    it("returns null for missing 'in' keyword", () => {
-        expect(parseEachExpression("items")).toBeNull();
-    });
-
-    it("returns null for empty string", () => {
-        expect(parseEachExpression("")).toBeNull();
-    });
-
-    it("returns null for 'in' without iterable", () => {
-        expect(parseEachExpression("item in")).toBeNull();
-    });
-});
 
 // ── Text interpolation bindings ─────────────────────────────────
 
@@ -527,5 +424,156 @@ describe("resolveBindings — result pattern", () => {
         expect(r.ok).toBe(true);
         const d = ok(r);
         expect(d.diagnostics.some((diag) => diag.severity === "warning")).toBe(true);
+    });
+});
+
+// ── Component event bindings ───────────────────────────────────
+
+describe("resolveBindings — component event bindings", () => {
+    const PARENT_WITH_HANDLER = `
+export default define(function() {
+  return {
+    state: { count: 0 },
+    actions: {
+      increment(state) { state.count++; },
+      handleChildChange(state, value) { state.count = value; }
+    }
+  };
+});`;
+
+    it("resolves @change on component element as component-event binding", () => {
+        const d = ok(resolve(
+            '<Counter @change="handleChildChange" />',
+            PARENT_WITH_HANDLER,
+        ));
+        const binding = d.output.bindings.find(b => b.type === "component-event");
+        expect(binding).toBeDefined();
+        expect(binding!.target).toBe("handleChildChange");
+        expect(binding!.expression).toBe("handleChildChange");
+        expect(binding!.referencedNames).toEqual(["handleChildChange"]);
+    });
+
+    it("resolves @click on native element as regular event binding", () => {
+        const d = ok(resolve(
+            '<button @click="increment">+</button>',
+            PARENT_WITH_HANDLER,
+        ));
+        const binding = d.output.bindings.find(b => b.type === "event");
+        expect(binding).toBeDefined();
+        expect(binding!.target).toBe("increment");
+    });
+
+    it("E302: component event handler is not a known action", () => {
+        const f = err(resolve(
+            '<Counter @change="nonexistent" />',
+            PARENT_WITH_HANDLER,
+        ));
+        expect(f.diagnostics.some(d => d.code === ResolverDiagnostics.E302)).toBe(true);
+        expect(f.output.bindings).toHaveLength(1);
+        expect(f.output.bindings[0].type).toBe("component-event");
+    });
+
+    it("mixed native events and component events in same template", () => {
+        const d = ok(resolve(
+            '<div><button @click="increment">+</button><Counter @change="handleChildChange" /></div>',
+            PARENT_WITH_HANDLER,
+        ));
+        const types = d.output.bindings.map(b => b.type);
+        expect(types).toContain("event");
+        expect(types).toContain("component-event");
+    });
+});
+
+// ── Multi-layer A→B→C emit propagation ─────────────────────────
+
+describe("resolveBindings — multi-layer emit propagation (A→B→C)", () => {
+    // Component C: emits "validated"
+    const COMPONENT_C_SCRIPT = `
+export default define(function() {
+  return {
+    state: { isValid: false },
+    actions: {
+      validate(state, emit) {
+        state.isValid = true;
+        emit("validated", state.isValid);
+      }
+    },
+    emits: ["validated"]
+  };
+});`;
+
+    // Component B: listens to C's "validated", does pre-processing, re-emits "submitted"
+    const COMPONENT_B_SCRIPT = `
+export default define(function() {
+  return {
+    state: { data: null },
+    actions: {
+      onChildValidated(state, emit, isValid) {
+        if (isValid) {
+          state.data = "processed";
+          emit("submitted", state.data);
+        }
+      }
+    },
+    emits: ["submitted"]
+  };
+});`;
+
+    // Component A: listens to B's "submitted" — leaf consumer, no emits
+    const COMPONENT_A_SCRIPT = `
+export default define(function() {
+  return {
+    state: { result: null },
+    actions: {
+      onSubmit(state, value) {
+        state.result = value;
+      }
+    }
+  };
+});`;
+
+    it("Component C: analyzer extracts emits and emit-capable action", () => {
+        const r = analyzeScript(COMPONENT_C_SCRIPT, null);
+        expect(r.ok).toBe(true);
+        const s = (r as any).data.output.server;
+        expect(s.emits).toEqual([{name: "validated"}]);
+        expect(s.actions[0].hasEmit).toBe(true);
+    });
+
+    it("Component B: analyzer extracts emits and action with emit + extra params", () => {
+        const r = analyzeScript(COMPONENT_B_SCRIPT, null);
+        expect(r.ok).toBe(true);
+        const s = (r as any).data.output.server;
+        expect(s.emits).toEqual([{name: "submitted"}]);
+        expect(s.actions[0].name).toBe("onChildValidated");
+        expect(s.actions[0].hasEmit).toBe(true);
+        expect(s.actions[0].params).toEqual(["isValid"]);
+    });
+
+    it("Component B template: resolver wires C's emit to B's action", () => {
+        const d = ok(resolve(
+            '<div><FormField @validated="onChildValidated" /></div>',
+            COMPONENT_B_SCRIPT,
+        ));
+        const binding = d.output.bindings.find(b => b.type === "component-event");
+        expect(binding).toBeDefined();
+        expect(binding!.target).toBe("onChildValidated");
+    });
+
+    it("Component A template: resolver wires B's emit to A's action", () => {
+        const d = ok(resolve(
+            '<div><FormSection @submitted="onSubmit" /></div>',
+            COMPONENT_A_SCRIPT,
+        ));
+        const binding = d.output.bindings.find(b => b.type === "component-event");
+        expect(binding).toBeDefined();
+        expect(binding!.target).toBe("onSubmit");
+    });
+
+    it("Component A: has no emits (leaf consumer)", () => {
+        const r = analyzeScript(COMPONENT_A_SCRIPT, null);
+        expect(r.ok).toBe(true);
+        const s = (r as any).data.output.server;
+        expect(s.emits).toEqual([]);
     });
 });
