@@ -41,13 +41,21 @@ export interface ActionInfo {
   name: string;
   /** Auto-detected from params: second param named "ctx" → "server", otherwise → "client" */
   kind: "client" | "server";
-  /** Extra parameter names beyond state (and ctx for server actions).
-   *  e.g. for `save(state, ctx, id)` → ["id"] */
+  /** Whether this action has an `emit` parameter and can emit events */
+  hasEmit: boolean;
+  /** Extra parameter names beyond state, ctx, and emit.
+   *  e.g. for `save(state, ctx, emit, id)` → ["id"] */
   params: string[];
   /** Whether the function is declared async */
   isAsync: boolean;
   /** Raw function body source, including braces for block bodies */
   body: string;
+}
+
+/** A declared emittable event from the `emits` property of the define() return. */
+export interface EmitInfo {
+  /** Event name, e.g. "change", "submit" */
+  name: string;
 }
 
 /** A single import statement extracted from a script block (regular or type-only). */
@@ -61,7 +69,7 @@ export interface ImportInfo {
   isTypeOnly: boolean;
 }
 
-/** Everything extracted from a `<script server>` block: imports, state, actions, and props type. */
+/** Everything extracted from a `<script server>` block: imports, state, actions, emits, and props type. */
 export interface ServerAnalysis {
   /** All imports from the server script block (type-only imports listed first) */
   imports: ImportInfo[];
@@ -69,6 +77,8 @@ export interface ServerAnalysis {
   state: StateField[];
   /** Actions from the `actions` property, classified as client or server */
   actions: ActionInfo[];
+  /** Declared emittable event names from the `emits` property. Empty array if not declared. */
+  emits: EmitInfo[];
   /** Raw TS type annotation string from the props parameter, or null if no props.
    *  e.g. "{ label: string, count: number }" */
   propsType: string | null;
@@ -115,6 +125,8 @@ export const AnalyzerDiagnostics = {
   E204: "E204", // Return value missing 'actions' property
   E205: "E205", // Acorn parse error (server)
   E206: "E206", // Action is not a function
+  E207: "E207", // Emit name is not a string literal
+  E208: "E208", // emits property is not an array expression
 
   // Client errors
   E210: "E210", // No export default in client script
@@ -123,6 +135,8 @@ export const AnalyzerDiagnostics = {
 
   // Warnings
   W200: "W200", // Unknown lifecycle hook name
+  W201: "W201", // Action has emit parameter but component declares no emits
+  W202: "W202", // Component declares emits but no action uses emit
 } as const;
 
 const KNOWN_HOOKS = new Set(["mounted", "unmounted"]);
@@ -407,6 +421,7 @@ function analyzeServerBlock(
     imports: [],
     state: [],
     actions: [],
+    emits: [],
     propsType: null,
   };
 
@@ -432,7 +447,7 @@ function analyzeServerBlock(
       null,
       "Add: export default define(function() { ... })",
     ));
-    return { imports, state: [], actions: [], propsType };
+    return { imports, state: [], actions: [], emits: [], propsType };
   }
 
   // Check it's a define() call
@@ -448,7 +463,7 @@ function analyzeServerBlock(
       null,
       "Use: export default define(function() { ... })",
     ));
-    return { imports, state: [], actions: [], propsType };
+    return { imports, state: [], actions: [], emits: [], propsType };
   }
 
   // Check define() argument is a function
@@ -461,7 +476,7 @@ function analyzeServerBlock(
       null,
       "Use: define(function() { return { state: {}, actions: {} } })",
     ));
-    return { imports, state: [], actions: [], propsType };
+    return { imports, state: [], actions: [], emits: [], propsType };
   }
 
   // Navigate to the return value (ObjectExpression)
@@ -481,15 +496,17 @@ function analyzeServerBlock(
       "Return value is missing the 'actions' property.",
       null,
     ));
-    return { imports, state: [], actions: [], propsType };
+    return { imports, state: [], actions: [], emits: [], propsType };
   }
 
-  // Extract state and actions from the return object
+  // Extract state, actions, and emits from the return object
   const stateProp = findProperty(returnObj, "state");
   const actionsProp = findProperty(returnObj, "actions");
+  const emitsProp = findProperty(returnObj, "emits");
 
   let state: StateField[] = [];
   let actions: ActionInfo[] = [];
+  let emits: EmitInfo[] = [];
 
   if (!stateProp) {
     diagnostics.push(createDiagnostic(
@@ -513,7 +530,42 @@ function analyzeServerBlock(
     actions = extractActions(actionsProp.value, cleaned, diagnostics);
   }
 
-  return { imports, state, actions, propsType };
+  if (emitsProp) {
+    if (emitsProp.value.type === "ArrayExpression") {
+      emits = extractEmitDeclarations(emitsProp.value, cleaned, diagnostics);
+    } else {
+      diagnostics.push(createDiagnostic(
+        "error",
+        AnalyzerDiagnostics.E208,
+        "The 'emits' property must be an array of string literals.",
+        null,
+        'Use: emits: ["change", "submit"]',
+      ));
+    }
+  }
+
+  // Cross-validate: actions using emit vs declared emits
+  const anyActionEmits = actions.some(a => a.hasEmit);
+  if (anyActionEmits && emits.length === 0) {
+    diagnostics.push(createDiagnostic(
+      "warning",
+      AnalyzerDiagnostics.W201,
+      "Action has 'emit' parameter but component declares no 'emits'.",
+      null,
+      "Add an 'emits' property to the define() return object.",
+    ));
+  }
+  if (!anyActionEmits && emits.length > 0) {
+    diagnostics.push(createDiagnostic(
+      "warning",
+      AnalyzerDiagnostics.W202,
+      "Component declares 'emits' but no action uses the 'emit' parameter.",
+      null,
+      "Add an 'emit' parameter to actions that need to emit events.",
+    ));
+  }
+
+  return { imports, state, actions, emits, propsType };
 }
 
 /**
@@ -607,16 +659,46 @@ function extractActions(
     const isServer = params.length >= 2 && params[1] === "ctx";
     const kind: "client" | "server" = isServer ? "server" : "client";
 
-    // Extra params: skip state (and ctx for server)
-    const extraStart = isServer ? 2 : 1;
+    // Detect emit parameter: comes after state (and ctx for server)
+    const emitIdx = isServer ? 2 : 1;
+    const hasEmit = params.length > emitIdx && params[emitIdx] === "emit";
+
+    // Extra params: skip state, ctx, and emit
+    const extraStart = emitIdx + (hasEmit ? 1 : 0);
     const extraParams = params.slice(extraStart);
 
     const isAsync = value.async === true;
     const body = extractFunctionBody(value, source);
 
-    actions.push({ name, kind, params: extraParams, isAsync, body });
+    actions.push({ name, kind, hasEmit, params: extraParams, isAsync, body });
   }
   return actions;
+}
+
+/**
+ * Extract EmitInfo[] from an emits ArrayExpression.
+ */
+function extractEmitDeclarations(
+  arr: AcornNode,
+  source: string,
+  diagnostics: Diagnostic[],
+): EmitInfo[] {
+  const emits: EmitInfo[] = [];
+  for (const el of arr.elements) {
+    if (!el) continue; // sparse array hole
+    if (el.type === "Literal" && typeof el.value === "string") {
+      emits.push({ name: el.value });
+    } else {
+      diagnostics.push(createDiagnostic(
+        "error",
+        AnalyzerDiagnostics.E207,
+        `Emit name must be a string literal, got ${source.slice(el.start, el.end)}.`,
+        null,
+        'Each emit declaration must be a string, e.g. "change".',
+      ));
+    }
+  }
+  return emits;
 }
 
 /**

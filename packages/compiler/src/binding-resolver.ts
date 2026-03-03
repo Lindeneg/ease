@@ -1,4 +1,3 @@
-// Stage 4: Binding Resolver
 // Walks the template AST, cross-references every expression against the script
 // analysis (state fields, actions), and produces a flat list of Binding objects
 // for code generation.
@@ -7,12 +6,12 @@ import {createDiagnostic, type Diagnostic, type StageOutput} from "./diagnostics
 import {success, failure, type Result} from "@ease/shared";
 import type {TemplateNode, ElementNode, InterpolationNode} from "./template-parser.js";
 import type {ScriptAnalysis} from "./script-analyzer.js";
-import {extractIdentifiers, parseEachExpression} from "./utils.js";
+import {extractIdentifiers, parseEachExpression, isComponentTag} from "./utils.js";
 
 // ── Types ──────────────────────────────────────────────────────
 
 /** Classification of where a binding originates in the template. */
-export type BindingType = "text" | "event" | "attr" | "conditional" | "loop";
+export type BindingType = "text" | "event" | "component-event" | "attr" | "conditional" | "loop";
 
 /** A resolved connection between a template expression and script declarations. */
 export interface Binding {
@@ -48,6 +47,7 @@ export const ResolverDiagnostics = {
     // Errors
     E300: "E300", // Event directive references unknown action
     E301: "E301", // @each directive has invalid syntax
+    E302: "E302", // Component event handler references unknown action
 
     // Warnings
     W300: "W300", // Expression references unknown identifier
@@ -61,6 +61,7 @@ export const ResolverDiagnostics = {
 interface WalkContext {
     knownState: Set<string>;
     knownActions: Set<string>;
+    knownEmits: Set<string>;
     loopVars: Set<string>;
     bindings: Binding[];
     diagnostics: Diagnostic[];
@@ -131,7 +132,11 @@ function resolveElement(node: ElementNode, nodePath: number[], ctx: WalkContext)
     for (const dir of node.directives) {
         switch (dir.kind) {
             case "event":
-                resolveEventDirective(dir.name, dir.value, nodePath, ctx);
+                if (isComponentTag(node.tag)) {
+                    resolveComponentEventDirective(dir.name, dir.value, nodePath, ctx);
+                } else {
+                    resolveEventDirective(dir.name, dir.value, nodePath, ctx);
+                }
                 break;
 
             case "conditional":
@@ -183,6 +188,39 @@ function resolveEventDirective(
 
     ctx.bindings.push({
         type: "event",
+        expression: value,
+        target: actionName,
+        referencedNames: [actionName],
+        nodePath,
+    });
+}
+
+function resolveComponentEventDirective(
+    directiveName: string,
+    value: string,
+    nodePath: number[],
+    ctx: WalkContext
+): void {
+    const actionName = value.trim();
+
+    // The handler must be a known action of the parent component
+    if (!ctx.knownActions.has(actionName)) {
+        const known = [...ctx.knownActions];
+        ctx.diagnostics.push(
+            createDiagnostic(
+                "error",
+                ResolverDiagnostics.E302,
+                `Component event @${directiveName} handler '${actionName}' is not a known action.`,
+                null,
+                known.length > 0
+                    ? `Known actions: ${known.join(", ")}`
+                    : "No actions are defined in the script block."
+            )
+        );
+    }
+
+    ctx.bindings.push({
+        type: "component-event",
         expression: value,
         target: actionName,
         referencedNames: [actionName],
@@ -346,15 +384,18 @@ export function resolveBindings(template: TemplateNode[], script: ScriptAnalysis
 
     const knownState = new Set<string>();
     const knownActions = new Set<string>();
+    const knownEmits = new Set<string>();
 
     if (script.server) {
         for (const s of script.server.state) knownState.add(s.name);
         for (const a of script.server.actions) knownActions.add(a.name);
+        for (const e of script.server.emits) knownEmits.add(e.name);
     }
 
     const ctx: WalkContext = {
         knownState,
         knownActions,
+        knownEmits,
         loopVars: new Set(),
         bindings,
         diagnostics,

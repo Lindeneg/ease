@@ -9,6 +9,11 @@ export interface ServerContext {
   response: unknown;
 }
 
+// ----- Emit -----
+
+/** The emit function signature, injected into actions that declare an `emit` parameter. */
+export type EmitFn = (event: string, ...payload: any[]) => void;
+
 // ----- Actions -----
 
 /** A pure/client action — no ctx parameter, runs instantly on client. */
@@ -29,9 +34,14 @@ export type Actions<S> = Record<string, Action<S>>;
 
 // ----- Component Definition -----
 
+/** The shape returned by a component factory inside define(). */
 export interface ComponentDef<S, A extends Actions<S> = Actions<S>> {
+  /** Reactive state object — each property becomes an observable field. */
   state: S;
+  /** Named action functions that modify state and/or interact with the server. */
   actions: A;
+  /** Event names this component can emit to its parent. Optional — omit if no events emitted. */
+  emits?: string[];
 }
 
 /** The return type of define() — what the compiler receives. */

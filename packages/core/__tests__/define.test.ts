@@ -1,6 +1,6 @@
 import { describe, it, expect, expectTypeOf, assertType } from "vitest";
 import { define } from "../src/index.js";
-import type { ComponentDef, DefinedComponent } from "../src/index.js";
+import type { ComponentDef, DefinedComponent, EmitFn } from "../src/index.js";
 
 describe("define()", () => {
   it("returns a DefinedComponent wrapping the factory", () => {
@@ -102,5 +102,56 @@ describe("define() type safety", () => {
     define(function (_props: {}) {
       return { state: {} };
     });
+  });
+});
+
+describe("define() with emits", () => {
+  it("returns ComponentDef with emits array", () => {
+    const component = define(function (_props: {}) {
+      return {
+        state: { count: 0 },
+        actions: {
+          increment(state) {
+            state.count++;
+          },
+        },
+        emits: ["change"],
+      };
+    });
+    const def = component.factory({});
+    expect(def.emits).toEqual(["change"]);
+  });
+
+  it("emits is optional — existing components work without it", () => {
+    const component = define(function (_props: {}) {
+      return {
+        state: { count: 0 },
+        actions: {
+          increment(state) {
+            state.count++;
+          },
+        },
+      };
+    });
+    const def = component.factory({});
+    expect(def.emits).toBeUndefined();
+  });
+
+  it("allows empty emits array", () => {
+    const component = define(function (_props: {}) {
+      return {
+        state: {},
+        actions: {},
+        emits: [],
+      };
+    });
+    const def = component.factory({});
+    expect(def.emits).toEqual([]);
+  });
+
+  it("EmitFn type is callable with event name and payload", () => {
+    const emitFn: EmitFn = (_event, ..._payload) => {};
+    expectTypeOf(emitFn).toBeFunction();
+    expectTypeOf(emitFn).parameters.toMatchTypeOf<[string, ...any[]]>();
   });
 });
