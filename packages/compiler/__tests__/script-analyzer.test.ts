@@ -3,33 +3,35 @@ import {
   analyzeScript,
   AnalyzerDiagnostics,
   type AnalyzerResult,
-  type AnalyzerData,
-  type AnalyzerFailure,
+  type ScriptAnalysis,
   type ServerAnalysis,
   type ClientAnalysis,
 } from "../src/script-analyzer.js";
+import type { StageOutput } from "../src/diagnostics.js";
 import type { ResultSuccess, ResultFailure } from "@ease/shared";
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-function ok(r: AnalyzerResult): AnalyzerData {
+type AnalyzerOutput = StageOutput<ScriptAnalysis>;
+
+function ok(r: AnalyzerResult): AnalyzerOutput {
   expect(r.ok).toBe(true);
-  return (r as ResultSuccess<AnalyzerData>).data;
+  return (r as ResultSuccess<AnalyzerOutput>).data;
 }
 
-function err(r: AnalyzerResult): AnalyzerFailure {
+function err(r: AnalyzerResult): AnalyzerOutput {
   expect(r.ok).toBe(false);
-  return (r as ResultFailure<AnalyzerFailure>).ctx;
+  return (r as ResultFailure<AnalyzerOutput>).ctx;
 }
 
-function server(d: AnalyzerData | AnalyzerFailure): ServerAnalysis {
-  expect(d.analysis.server).not.toBeNull();
-  return d.analysis.server!;
+function server(d: AnalyzerOutput): ServerAnalysis {
+  expect(d.output.server).not.toBeNull();
+  return d.output.server!;
 }
 
-function client(d: AnalyzerData | AnalyzerFailure): ClientAnalysis {
-  expect(d.analysis.client).not.toBeNull();
-  return d.analysis.client!;
+function client(d: AnalyzerOutput): ClientAnalysis {
+  expect(d.output.client).not.toBeNull();
+  return d.output.client!;
 }
 
 // ── Server — basic extraction ──────────────────────────────────
@@ -372,8 +374,8 @@ export default {
 };
 `;
     const d = ok(analyzeScript(serverSrc, clientSrc));
-    expect(d.analysis.server).not.toBeNull();
-    expect(d.analysis.client).not.toBeNull();
+    expect(d.output.server).not.toBeNull();
+    expect(d.output.client).not.toBeNull();
     expect(server(d).state).toHaveLength(1);
     expect(server(d).actions).toHaveLength(1);
     expect(client(d).hooks).toHaveLength(1);
@@ -389,8 +391,8 @@ export default define(function() {
 });
 `;
     const d = ok(analyzeScript(source, null));
-    expect(d.analysis.server).not.toBeNull();
-    expect(d.analysis.client).toBeNull();
+    expect(d.output.server).not.toBeNull();
+    expect(d.output.client).toBeNull();
   });
 
   it("handles client-only", () => {
@@ -400,14 +402,14 @@ export default {
 };
 `;
     const d = ok(analyzeScript(null, source));
-    expect(d.analysis.server).toBeNull();
-    expect(d.analysis.client).not.toBeNull();
+    expect(d.output.server).toBeNull();
+    expect(d.output.client).not.toBeNull();
   });
 
   it("handles both null", () => {
     const d = ok(analyzeScript(null, null));
-    expect(d.analysis.server).toBeNull();
-    expect(d.analysis.client).toBeNull();
+    expect(d.output.server).toBeNull();
+    expect(d.output.client).toBeNull();
     expect(d.diagnostics).toHaveLength(0);
   });
 });
@@ -419,7 +421,7 @@ describe("analyzeScript — error diagnostics", () => {
     const source = `const x = 1;`;
     const f = err(analyzeScript(source, null));
     expect(f.diagnostics.some((d) => d.code === AnalyzerDiagnostics.E200)).toBe(true);
-    expect(f.analysis.server).not.toBeNull();
+    expect(f.output.server).not.toBeNull();
   });
 
   it("E201: export default is not define()", () => {
@@ -463,8 +465,8 @@ const x = 1;
     expect(f.diagnostics.some((d) => d.code === AnalyzerDiagnostics.E200)).toBe(true);
     expect(f.diagnostics.some((d) => d.code === AnalyzerDiagnostics.E210)).toBe(true);
     // Partial results: server still has imports
-    expect(f.analysis.server!.imports).toHaveLength(1);
-    expect(f.analysis.server!.imports[0].source).toBe("./util.js");
+    expect(f.output.server!.imports).toHaveLength(1);
+    expect(f.output.server!.imports[0].source).toBe("./util.js");
   });
 });
 

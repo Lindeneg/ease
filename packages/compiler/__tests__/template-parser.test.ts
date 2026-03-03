@@ -3,43 +3,45 @@ import {
   parseTemplate,
   ParseDiagnostics,
   type ParseResult,
+  type TemplateNode,
   type TextNode,
   type InterpolationNode,
   type ElementNode,
   type SlotNode,
-  type ParseData,
-  type ParseFailure,
 } from "../src/template-parser.js";
+import type { StageOutput } from "../src/diagnostics.js";
 import type { ResultSuccess, ResultFailure } from "@ease/shared";
 
 // ── Helpers ─────────────────────────────────────────────────────
 
+type ParseOutput = StageOutput<TemplateNode[]>;
+
 /** Assert ok: true, return the data */
-function ok(r: ParseResult): ParseData {
+function ok(r: ParseResult): ParseOutput {
   expect(r.ok).toBe(true);
-  return (r as ResultSuccess<ParseData>).data;
+  return (r as ResultSuccess<ParseOutput>).data;
 }
 
 /** Assert ok: false, return the failure context */
-function err(r: ParseResult): ParseFailure {
+function err(r: ParseResult): ParseOutput {
   expect(r.ok).toBe(false);
-  return (r as ResultFailure<ParseFailure>).ctx;
+  return (r as ResultFailure<ParseOutput>).ctx;
 }
 
-function el(data: ParseData | ParseFailure, index: number = 0): ElementNode {
-  return data.nodes[index] as ElementNode;
+function el(data: ParseOutput, index: number = 0): ElementNode {
+  return data.output[index] as ElementNode;
 }
 
-function text(data: ParseData | ParseFailure, index: number = 0): TextNode {
-  return data.nodes[index] as TextNode;
+function text(data: ParseOutput, index: number = 0): TextNode {
+  return data.output[index] as TextNode;
 }
 
-function interp(data: ParseData | ParseFailure, index: number = 0): InterpolationNode {
-  return data.nodes[index] as InterpolationNode;
+function interp(data: ParseOutput, index: number = 0): InterpolationNode {
+  return data.output[index] as InterpolationNode;
 }
 
-function slot(data: ParseData | ParseFailure, index: number = 0): SlotNode {
-  return data.nodes[index] as SlotNode;
+function slot(data: ParseOutput, index: number = 0): SlotNode {
+  return data.output[index] as SlotNode;
 }
 
 // ── Basics ──────────────────────────────────────────────────────
@@ -47,7 +49,7 @@ function slot(data: ParseData | ParseFailure, index: number = 0): SlotNode {
 describe("parseTemplate — basics", () => {
   it("parses plain text", () => {
     const d = ok(parseTemplate("Hello world"));
-    expect(d.nodes).toHaveLength(1);
+    expect(d.output).toHaveLength(1);
     expect(text(d).type).toBe("text");
     expect(text(d).value).toBe("Hello world");
     expect(d.diagnostics).toHaveLength(0);
@@ -55,7 +57,7 @@ describe("parseTemplate — basics", () => {
 
   it("parses interpolation {{ expr }}", () => {
     const d = ok(parseTemplate("{{ count }}"));
-    expect(d.nodes).toHaveLength(1);
+    expect(d.output).toHaveLength(1);
     expect(interp(d).type).toBe("interpolation");
     expect(interp(d).expression).toBe("count");
   });
@@ -67,7 +69,7 @@ describe("parseTemplate — basics", () => {
 
   it("parses a simple element", () => {
     const d = ok(parseTemplate("<div></div>"));
-    expect(d.nodes).toHaveLength(1);
+    expect(d.output).toHaveLength(1);
     expect(el(d).type).toBe("element");
     expect(el(d).tag).toBe("div");
     expect(el(d).children).toHaveLength(0);
@@ -83,7 +85,7 @@ describe("parseTemplate — basics", () => {
 
   it("parses mixed text and interpolation", () => {
     const d = ok(parseTemplate("Hello {{ name }}, welcome!"));
-    expect(d.nodes).toHaveLength(3);
+    expect(d.output).toHaveLength(3);
     expect(text(d, 0).value).toBe("Hello ");
     expect(interp(d, 1).expression).toBe("name");
     expect(text(d, 2).value).toBe(", welcome!");
@@ -207,7 +209,7 @@ describe("parseTemplate — directives", () => {
 describe("parseTemplate — slots", () => {
   it("parses <slot /> default slot definition", () => {
     const d = ok(parseTemplate("<slot />"));
-    expect(d.nodes).toHaveLength(1);
+    expect(d.output).toHaveLength(1);
     expect(slot(d).type).toBe("slot");
     expect(slot(d).name).toBeNull();
   });
@@ -280,12 +282,12 @@ describe("parseTemplate — void and self-closing", () => {
 describe("parseTemplate — comments", () => {
   it("skips HTML comments (no AST node)", () => {
     const d = ok(parseTemplate("<!-- this is a comment -->"));
-    expect(d.nodes).toHaveLength(0);
+    expect(d.output).toHaveLength(0);
   });
 
   it("skips comments between elements", () => {
     const d = ok(parseTemplate("<div></div><!-- separator --><span></span>"));
-    expect(d.nodes).toHaveLength(2);
+    expect(d.output).toHaveLength(2);
     expect(el(d, 0).tag).toBe("div");
     expect(el(d, 1).tag).toBe("span");
   });
@@ -302,13 +304,13 @@ describe("parseTemplate — comments", () => {
 describe("parseTemplate — edge cases", () => {
   it("handles empty template", () => {
     const d = ok(parseTemplate(""));
-    expect(d.nodes).toHaveLength(0);
+    expect(d.output).toHaveLength(0);
     expect(d.diagnostics).toHaveLength(0);
   });
 
   it("handles whitespace-only template", () => {
     const d = ok(parseTemplate("   \n  \t  "));
-    expect(d.nodes).toHaveLength(1);
+    expect(d.output).toHaveLength(1);
     expect(text(d).value).toBe("   \n  \t  ");
   });
 
@@ -332,7 +334,7 @@ describe("parseTemplate — edge cases", () => {
 
   it("handles multiple root elements", () => {
     const d = ok(parseTemplate("<div></div><span></span>"));
-    expect(d.nodes).toHaveLength(2);
+    expect(d.output).toHaveLength(2);
     expect(el(d, 0).tag).toBe("div");
     expect(el(d, 1).tag).toBe("span");
   });
@@ -349,7 +351,7 @@ describe("parseTemplate — error diagnostics", () => {
     expect(f.diagnostics[0].hint).toContain("}}");
     expect(f.diagnostics[0].span).not.toBeNull();
     // Returns partial interpolation node
-    expect(f.nodes).toHaveLength(1);
+    expect(f.output).toHaveLength(1);
     expect(interp(f).expression).toBe("oops");
   });
 
@@ -421,7 +423,7 @@ describe("parseTemplate — integration: counter component", () => {
 
   it("parses the full counter template", () => {
     const d = ok(parseTemplate(template));
-    expect(d.nodes).toHaveLength(1);
+    expect(d.output).toHaveLength(1);
 
     const root = el(d);
     expect(root.tag).toBe("div");
