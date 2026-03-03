@@ -1,4 +1,3 @@
-// Stage 2: Template Parser (recursive descent)
 // Parses template HTML into an AST with directives, slots, and bindings.
 
 import {
@@ -6,44 +5,64 @@ import {
   offsetToLocation,
   type Diagnostic,
   type SourceSpan,
+  type StageOutput,
 } from "./diagnostics.js";
 import { success, failure, Tokens, type Result } from "@ease/shared";
 
 // ── AST Node Types ──────────────────────────────────────────────
 
+/** A raw text segment between elements or interpolations. */
 export interface TextNode {
   type: "text";
+  /** The literal text content, including any whitespace */
   value: string;
 }
 
+/** A `{{ expr }}` interpolation, holding the trimmed JS expression. */
 export interface InterpolationNode {
   type: "interpolation";
+  /** The trimmed expression inside the mustaches, e.g. "count + 1" */
   expression: string;
 }
 
+/** An HTML element with attributes, directives, and children. */
 export interface ElementNode {
   type: "element";
+  /** Tag name, e.g. "div", "Button", "slot:header" */
   tag: string;
+  /** Static and dynamic attributes on this element */
   attrs: AttrNode[];
+  /** Directives (@click, @if, @each, etc.) on this element */
   directives: DirectiveNode[];
+  /** Child nodes (text, interpolation, nested elements, slots) */
   children: TemplateNode[];
 }
 
+/** An attribute on an element, either static (`class="x"`) or dynamic (`:prop="expr"`). */
 export interface AttrNode {
+  /** Attribute name without the `:` prefix for dynamic attrs */
   name: string;
+  /** Attribute value, or null for boolean attributes like `disabled` */
   value: string | null;
-  dynamic: boolean; // :prop="expr" → dynamic
+  /** True when prefixed with `:`, meaning the value is a JS expression */
+  dynamic: boolean;
 }
 
+/** A directive on an element, prefixed with `@` in the template (e.g. `@click="handler"`). */
 export interface DirectiveNode {
-  name: string; // "if", "each", "click", etc.
+  /** Directive name without the `@` prefix, e.g. "click", "if", "each" */
+  name: string;
+  /** The directive's value expression, or empty string for valueless directives like `@else` */
   value: string;
+  /** Classification: event handler, conditional, or loop */
   kind: "event" | "conditional" | "loop";
 }
 
+/** A slot definition (`<slot />` or `<slot name="x" />`), marking where child content is injected. */
 export interface SlotNode {
   type: "slot";
-  name: string | null; // null = default slot
+  /** Named slot identifier, or null for the default slot */
+  name: string | null;
 }
 
 export type TemplateNode =
@@ -54,17 +73,7 @@ export type TemplateNode =
 
 // ── Result Types ────────────────────────────────────────────────
 
-export interface ParseData {
-  nodes: TemplateNode[];
-  diagnostics: Diagnostic[]; // warnings only when ok: true
-}
-
-export interface ParseFailure {
-  nodes: TemplateNode[];       // partial AST for tooling/IDE
-  diagnostics: Diagnostic[];   // contains at least one error
-}
-
-export type ParseResult = Result<ParseData, ParseFailure>;
+export type ParseResult = Result<StageOutput<TemplateNode[]>, StageOutput<TemplateNode[]>>;
 
 // ── Diagnostic Codes ────────────────────────────────────────────
 
@@ -575,8 +584,8 @@ export function parseTemplate(source: string): ParseResult {
   const hasErrors = diagnostics.some((d) => d.severity === "error");
 
   if (hasErrors) {
-    return failure({ nodes, diagnostics });
+    return failure({ output: nodes, diagnostics });
   }
 
-  return success({ nodes, diagnostics });
+  return success({ output: nodes, diagnostics });
 }

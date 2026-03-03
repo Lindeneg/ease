@@ -1,4 +1,3 @@
-// Stage 3: Script Analyzer (acorn-based)
 // Parses <script server> and <script client> blocks, extracts structured data
 // for binding resolution and code generation.
 
@@ -6,66 +5,104 @@ import * as acorn from "acorn";
 import {
   createDiagnostic,
   type Diagnostic,
+  type StageOutput,
 } from "./diagnostics.js";
 import { success, failure, type Result } from "@ease/shared";
 
+// ── Named Character Constants ─────────────────────────────────
+
+const Chars = {
+  OPEN_BRACE: "{",
+  CLOSE_BRACE: "}",
+  OPEN_PAREN: "(",
+  CLOSE_PAREN: ")",
+  OPEN_ANGLE: "<",
+  CLOSE_ANGLE: ">",
+  COMMA: ",",
+  COLON: ":",
+  SEMICOLON: ";",
+  DOUBLE_QUOTE: '"',
+  SINGLE_QUOTE: "'",
+} as const;
+
 // ── Types ──────────────────────────────────────────────────────
 
+/** A single reactive state property declared in the `state` object of a define() return. */
 export interface StateField {
+  /** Identifier name of the state property, e.g. "count" */
   name: string;
-  initializer: string; // raw JS expression
+  /** Raw JS expression from the source, e.g. "0", "[]", "props.initial" */
+  initializer: string;
 }
 
+/** A user-defined action from the `actions` object, auto-classified as client or server. */
 export interface ActionInfo {
+  /** Identifier name of the action, e.g. "increment" */
   name: string;
-  kind: "client" | "server"; // auto-detected: has ctx → server
-  params: string[];           // parameter names beyond state (and ctx for server)
+  /** Auto-detected from params: second param named "ctx" → "server", otherwise → "client" */
+  kind: "client" | "server";
+  /** Extra parameter names beyond state (and ctx for server actions).
+   *  e.g. for `save(state, ctx, id)` → ["id"] */
+  params: string[];
+  /** Whether the function is declared async */
   isAsync: boolean;
-  body: string;               // raw function body
+  /** Raw function body source, including braces for block bodies */
+  body: string;
 }
 
+/** A single import statement extracted from a script block (regular or type-only). */
 export interface ImportInfo {
-  raw: string;           // full import statement
-  source: string;        // module specifier e.g. './button.ease'
-  isTypeOnly: boolean;   // import type { ... } → true
+  /** Full import statement text without trailing semicolon,
+   *  e.g. "import { define } from '@ease/core'" */
+  raw: string;
+  /** Module specifier, e.g. "@ease/core", "./button.ease" */
+  source: string;
+  /** True for `import type { ... }` statements */
+  isTypeOnly: boolean;
 }
 
+/** Everything extracted from a `<script server>` block: imports, state, actions, and props type. */
 export interface ServerAnalysis {
+  /** All imports from the server script block (type-only imports listed first) */
   imports: ImportInfo[];
+  /** State fields from the `state` property of the define() return object */
   state: StateField[];
+  /** Actions from the `actions` property, classified as client or server */
   actions: ActionInfo[];
-  propsType: string | null; // raw TS type string
+  /** Raw TS type annotation string from the props parameter, or null if no props.
+   *  e.g. "{ label: string, count: number }" */
+  propsType: string | null;
 }
 
+/** Everything extracted from a `<script client>` block: imports and lifecycle hooks. */
 export interface ClientAnalysis {
+  /** All imports from the client script block */
   imports: ImportInfo[];
+  /** Lifecycle hooks (mounted, unmounted) from the default export object */
   hooks: LifecycleHook[];
 }
 
+/** A lifecycle hook (e.g. mounted, unmounted) from a client script's default export object. */
 export interface LifecycleHook {
-  name: string;      // "mounted", "unmounted"
-  params: string[];  // e.g. ["el"]
-  body: string;      // raw function body
+  /** Hook name: "mounted" or "unmounted" (unknown names still extracted, with W200 warning) */
+  name: string;
+  /** Parameter names, e.g. ["el"] */
+  params: string[];
+  /** Raw function body source, including braces for block bodies */
+  body: string;
 }
 
+/** Combined analysis result for both script blocks of a component. */
 export interface ScriptAnalysis {
+  /** Null when no <script server> block is present */
   server: ServerAnalysis | null;
+  /** Null when no <script client> block is present */
   client: ClientAnalysis | null;
 }
 
 // ── Result Types ───────────────────────────────────────────────
 
-export interface AnalyzerData {
-  analysis: ScriptAnalysis;
-  diagnostics: Diagnostic[];
-}
-
-export interface AnalyzerFailure {
-  analysis: ScriptAnalysis;
-  diagnostics: Diagnostic[];
-}
-
-export type AnalyzerResult = Result<AnalyzerData, AnalyzerFailure>;
+export type AnalyzerResult = Result<StageOutput<ScriptAnalysis>, StageOutput<ScriptAnalysis>>;
 
 // ── Diagnostic Codes ───────────────────────────────────────────
 
@@ -90,6 +127,25 @@ export const AnalyzerDiagnostics = {
 
 const KNOWN_HOOKS = new Set(["mounted", "unmounted"]);
 
+// ── Scanner Primitives ────────────────────────────────────────
+
+function isWhitespace(ch: string): boolean {
+  return ch === " " || ch === "\t" || ch === "\r";
+}
+
+function skipWhitespace(source: string, pos: number): number {
+  while (pos < source.length && isWhitespace(source[pos])) pos++;
+  return pos;
+}
+
+function isIdentChar(ch: string): boolean {
+  const c = ch.charCodeAt(0);
+  return (c >= 65 && c <= 90)   // A-Z
+      || (c >= 97 && c <= 122)  // a-z
+      || (c >= 48 && c <= 57)   // 0-9
+      || c === 95 || c === 36;  // _ $
+}
+
 // ── TypeScript Stripping ───────────────────────────────────────
 
 interface StrippedScript {
@@ -99,51 +155,114 @@ interface StrippedScript {
 }
 
 /**
+ * Detect whether a line is an `import type` statement.
+ */
+function isTypeImportLine(line: string): boolean {
+  let i = skipWhitespace(line, 0);
+  if (!line.startsWith("import", i)) return false;
+  i += 6;
+  if (i >= line.length || !isWhitespace(line[i])) return false;
+  i = skipWhitespace(line, i);
+  if (!line.startsWith("type", i)) return false;
+  i += 4;
+  return i >= line.length || isWhitespace(line[i]);
+}
+
+/**
+ * Extract the module specifier from an import line.
+ * e.g. `import { foo } from './bar'` → `./bar`
+ */
+function extractModuleSpecifier(line: string): string {
+  const fromIdx = line.indexOf("from");
+  if (fromIdx === -1) return "";
+  let i = skipWhitespace(line, fromIdx + 4);
+  const quote = line[i];
+  if (quote !== Chars.DOUBLE_QUOTE && quote !== Chars.SINGLE_QUOTE) return "";
+  i++;
+  const start = i;
+  while (i < line.length && line[i] !== quote) i++;
+  return line.slice(start, i);
+}
+
+/**
+ * Strip a trailing semicolon if present.
+ */
+function stripTrailingSemicolon(s: string): string {
+  return s.endsWith(Chars.SEMICOLON) ? s.slice(0, -1) : s;
+}
+
+/**
+ * Find the opening `(` of define()'s inner param list.
+ * Handles both `define(function name(` and `define((`.
+ * Skips non-matching occurrences of "define" (e.g. in `import { define }`).
+ * Returns the position immediately after the `(`, or -1 if not found.
+ */
+function findParamListOpen(source: string): number {
+  let searchFrom = 0;
+  while (true) {
+    const defineIdx = source.indexOf("define", searchFrom);
+    if (defineIdx === -1) return -1;
+    let i = skipWhitespace(source, defineIdx + 6);
+    if (i >= source.length || source[i] !== Chars.OPEN_PAREN) {
+      searchFrom = defineIdx + 6;
+      continue;
+    }
+    i = skipWhitespace(source, i + 1);
+    if (source.startsWith("function", i)) {
+      i += 8;
+      while (i < source.length && isIdentChar(source[i])) i++;  // skip optional name
+      i = skipWhitespace(source, i);
+    }
+    if (i >= source.length || source[i] !== Chars.OPEN_PAREN) {
+      searchFrom = defineIdx + 6;
+      continue;
+    }
+    return i + 1;
+  }
+}
+
+/**
  * Strip TypeScript annotations from source before acorn parsing.
- * Handles: import type, props type annotation, as casts.
+ * Handles: import type, props type annotation.
  */
 function stripTypeScript(source: string): StrippedScript {
   const typeImports: ImportInfo[] = [];
   let propsType: string | null = null;
 
-  // 1. Strip `import type` lines and record them
+  // 1. Strip `import type` lines, record them, preserve line count
   const lines = source.split("\n");
   const cleanedLines: string[] = [];
   for (const line of lines) {
-    const trimmed = line.trim();
-    if (/^import\s+type\s+/.test(trimmed)) {
-      // Extract source from import type statement
-      const srcMatch = trimmed.match(/from\s+["']([^"']+)["']/);
+    if (isTypeImportLine(line)) {
+      const trimmed = line.trim();
       typeImports.push({
-        raw: trimmed.replace(/;$/, ""),
-        source: srcMatch ? srcMatch[1] : "",
+        raw: stripTrailingSemicolon(trimmed),
+        source: extractModuleSpecifier(trimmed),
         isTypeOnly: true,
       });
-      cleanedLines.push(""); // preserve line numbers
+      cleanedLines.push("");
     } else {
       cleanedLines.push(line);
     }
   }
-
   let cleaned = cleanedLines.join("\n");
 
-  // 2. Strip props type annotation from define(function(props: { ... }) or define((props: { ... }) =>
-  // Find the define( call, then locate the param list
-  const defineMatch = cleaned.match(/define\s*\(\s*(?:function\s*\w*\s*)?\(/);
-  if (defineMatch && defineMatch.index !== undefined) {
-    const paramStart = defineMatch.index + defineMatch[0].length;
-    // Find props identifier followed by ':'
-    const afterParams = cleaned.slice(paramStart);
-    const propsColonMatch = afterParams.match(/^(\s*\w+)\s*:\s*/);
-    if (propsColonMatch) {
-      const colonEnd = paramStart + propsColonMatch[0].length;
-      // Use bracket-depth scanner to capture the type annotation
-      const typeResult = scanTypeAnnotation(cleaned, colonEnd);
-      if (typeResult) {
-        propsType = typeResult.type;
-        // Strip the ": Type" part, keep just the param name
-        const stripStart = paramStart + propsColonMatch[1].length;
-        cleaned = cleaned.slice(0, stripStart) + cleaned.slice(typeResult.end);
+  // 2. Find define()'s param list, strip props type annotation
+  const paramStart = findParamListOpen(cleaned);
+  if (paramStart !== -1) {
+    let i = skipWhitespace(cleaned, paramStart);
+    const identStart = i;
+    while (i < cleaned.length && isIdentChar(cleaned[i])) i++;
+    const identEnd = i;
+    if (identEnd > identStart) {
+      i = skipWhitespace(cleaned, i);
+      if (i < cleaned.length && cleaned[i] === Chars.COLON) {
+        i = skipWhitespace(cleaned, i + 1);
+        const typeResult = scanTypeAnnotation(cleaned, i);
+        if (typeResult) {
+          propsType = typeResult.type;
+          cleaned = cleaned.slice(0, identEnd) + cleaned.slice(typeResult.end);
+        }
       }
     }
   }
@@ -166,17 +285,17 @@ function scanTypeAnnotation(
 
   while (i < source.length) {
     const ch = source[i];
-    if (ch === "{" || ch === "(" || ch === "<") {
+    if (ch === Chars.OPEN_BRACE || ch === Chars.OPEN_PAREN || ch === Chars.OPEN_ANGLE) {
       depth++;
       started = true;
-    } else if (ch === "}" || ch === ")" || ch === ">") {
+    } else if (ch === Chars.CLOSE_BRACE || ch === Chars.CLOSE_PAREN || ch === Chars.CLOSE_ANGLE) {
       if (depth === 0) {
         // We've hit closing paren or similar at depth 0 — end of type
         const type = source.slice(start, i).trim();
         return type.length > 0 ? { type, end: i } : null;
       }
       depth--;
-    } else if (ch === "," && depth === 0 && started) {
+    } else if (ch === Chars.COMMA && depth === 0 && started) {
       const type = source.slice(start, i).trim();
       return type.length > 0 ? { type, end: i } : null;
     }
@@ -229,7 +348,7 @@ function extractImports(ast: AcornNode, source: string): ImportInfo[] {
   for (const node of ast.body) {
     if (node.type === "ImportDeclaration") {
       imports.push({
-        raw: source.slice(node.start, node.end).replace(/;$/, ""),
+        raw: stripTrailingSemicolon(source.slice(node.start, node.end)),
         source: node.source.value as string,
         isTypeOnly: false,
       });
@@ -248,6 +367,34 @@ function findExportDefault(ast: AcornNode): AcornNode | null {
     }
   }
   return null;
+}
+
+// ── Shared AST Helpers ────────────────────────────────────────
+
+/**
+ * Get the key name from a Property node's key (Identifier or Literal).
+ */
+function getPropertyKeyName(prop: AcornNode): string | null {
+  const key = prop.key;
+  if (key.type === "Identifier") return key.name;
+  if (key.type === "Literal") return String(key.value);
+  return null;
+}
+
+/**
+ * Extract parameter names from a function node.
+ */
+function getParamNames(fn: AcornNode, source: string): string[] {
+  return fn.params.map(
+    (p: AcornNode) => p.type === "Identifier" ? p.name : source.slice(p.start, p.end),
+  );
+}
+
+/**
+ * Check if a node is a function expression or arrow function.
+ */
+function isFunctionNode(node: AcornNode): boolean {
+  return node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression";
 }
 
 // ── Server Block Analysis ──────────────────────────────────────
@@ -306,10 +453,7 @@ function analyzeServerBlock(
 
   // Check define() argument is a function
   const arg = decl.arguments[0];
-  if (
-    !arg ||
-    (arg.type !== "FunctionExpression" && arg.type !== "ArrowFunctionExpression")
-  ) {
+  if (!arg || !isFunctionNode(arg)) {
     diagnostics.push(createDiagnostic(
       "error",
       AnalyzerDiagnostics.E202,
@@ -421,13 +565,7 @@ function extractStateFields(obj: AcornNode, source: string): StateField[] {
   const fields: StateField[] = [];
   for (const prop of obj.properties) {
     if (prop.type !== "Property") continue;
-    const key = prop.key;
-    const name =
-      key.type === "Identifier"
-        ? key.name
-        : key.type === "Literal"
-          ? String(key.value)
-          : null;
+    const name = getPropertyKeyName(prop);
     if (!name) continue;
 
     const initializer = source.slice(prop.value.start, prop.value.end);
@@ -447,20 +585,11 @@ function extractActions(
   const actions: ActionInfo[] = [];
   for (const prop of obj.properties) {
     if (prop.type !== "Property") continue;
-    const key = prop.key;
-    const name =
-      key.type === "Identifier"
-        ? key.name
-        : key.type === "Literal"
-          ? String(key.value)
-          : null;
+    const name = getPropertyKeyName(prop);
     if (!name) continue;
 
     const value = prop.value;
-    if (
-      value.type !== "FunctionExpression" &&
-      value.type !== "ArrowFunctionExpression"
-    ) {
+    if (!isFunctionNode(value)) {
       diagnostics.push(createDiagnostic(
         "error",
         AnalyzerDiagnostics.E206,
@@ -471,9 +600,7 @@ function extractActions(
       continue;
     }
 
-    const params: string[] = value.params.map(
-      (p: AcornNode) => (p.type === "Identifier" ? p.name : source.slice(p.start, p.end)),
-    );
+    const params = getParamNames(value, source);
 
     // Classify: first param is always state.
     // If second param is "ctx" → server action.
@@ -553,13 +680,7 @@ function analyzeClientBlock(
   const hooks: LifecycleHook[] = [];
   for (const prop of decl.properties) {
     if (prop.type !== "Property") continue;
-    const key = prop.key;
-    const name =
-      key.type === "Identifier"
-        ? key.name
-        : key.type === "Literal"
-          ? String(key.value)
-          : null;
+    const name = getPropertyKeyName(prop);
     if (!name) continue;
 
     if (!KNOWN_HOOKS.has(name)) {
@@ -573,13 +694,8 @@ function analyzeClientBlock(
     }
 
     const value = prop.value;
-    if (
-      value.type === "FunctionExpression" ||
-      value.type === "ArrowFunctionExpression"
-    ) {
-      const params = value.params.map(
-        (p: AcornNode) => (p.type === "Identifier" ? p.name : cleaned.slice(p.start, p.end)),
-      );
+    if (isFunctionNode(value)) {
+      const params = getParamNames(value, cleaned);
       const body = extractFunctionBody(value, cleaned);
       hooks.push({ name, params, body });
     }
@@ -608,11 +724,11 @@ export function analyzeScript(
     ? analyzeClientBlock(clientSource, diagnostics)
     : null;
 
-  const analysis: ScriptAnalysis = { server, client };
+  const output: ScriptAnalysis = { server, client };
 
   const hasErrors = diagnostics.some((d) => d.severity === "error");
   if (hasErrors) {
-    return failure({ analysis, diagnostics });
+    return failure({ output, diagnostics });
   }
-  return success({ analysis, diagnostics });
+  return success({ output, diagnostics });
 }

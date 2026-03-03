@@ -1,10 +1,12 @@
-// Stage 5: Server Codegen
 // Generates the server-side render function from a resolved component.
 
 import type { ResolvedComponent } from "../binding-resolver.js";
 
+/** The generated server-side rendering module for a component. */
 export interface ServerOutput {
+  /** The full generated JS module source code */
   code: string;
+  /** The exported render function name, e.g. "render" */
   renderFunctionName: string;
 }
 

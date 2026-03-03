@@ -1,4 +1,3 @@
-// Stage 1: Block Splitter
 // Extracts top-level <template>, <script>, and <style> blocks from .ease source.
 
 import {
@@ -20,19 +19,31 @@ export const SplitDiagnostics = {
 
 // ── Types ───────────────────────────────────────────────────────
 
+/** A raw top-level block extracted from a `.ease` file before any parsing. */
 export interface RawBlock {
+  /** Which kind of block: template, script, or style */
   type: "template" | "script" | "style";
+  /** Attributes on the opening tag, e.g. `{ server: true }` or `{ scoped: true }` */
   attrs: Record<string, string | true>;
+  /** The raw text content between the opening and closing tags */
   content: string;
+  /** Byte offset of the opening tag in the original source */
   start: number;
+  /** Byte offset just past the closing tag in the original source */
   end: number;
 }
 
+/** The result of splitting a `.ease` file into its top-level blocks. */
 export interface SplitResult {
+  /** The single `<template>` block, or null if absent */
   template: RawBlock | null;
+  /** The `<script server>` block, or null if absent */
   serverScript: RawBlock | null;
+  /** The `<script client>` block, or null if absent */
   clientScript: RawBlock | null;
+  /** Zero or more `<style>` blocks (with or without `scoped`) */
   styles: RawBlock[];
+  /** Diagnostics collected during splitting */
   diagnostics: Diagnostic[];
 }
 
