@@ -33,6 +33,7 @@ export type {
   ScriptAnalysis,
   StateField,
   ActionInfo,
+  EmitInfo,
   ImportInfo,
   ServerAnalysis,
   ClientAnalysis,
@@ -43,7 +44,7 @@ export type {
 export { resolveBindings, ResolverDiagnostics } from "./binding-resolver.js";
 export type { Binding, BindingType, ResolvedComponent, ResolverResult } from "./binding-resolver.js";
 
-export { extractIdentifiers, parseEachExpression } from "./utils.js";
+export { extractIdentifiers, parseEachExpression, isComponentTag } from "./utils.js";
 export type { EachExpression } from "./utils.js";
 
 export { generateServer } from "./codegen/server.js";
