@@ -30,11 +30,18 @@ export type {
   EmptyResult,
 } from "@ease/shared";
 
-export { analyzeScript } from "./script-analyzer.js";
+export { analyzeScript, AnalyzerDiagnostics } from "./script-analyzer.js";
 export type {
   ScriptAnalysis,
   StateField,
   ActionInfo,
+  ImportInfo,
+  ServerAnalysis,
+  ClientAnalysis,
+  LifecycleHook,
+  AnalyzerData,
+  AnalyzerFailure,
+  AnalyzerResult,
 } from "./script-analyzer.js";
 
 export { resolveBindings } from "./binding-resolver.js";
