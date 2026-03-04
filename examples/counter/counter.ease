@@ -1,0 +1,23 @@
+<template>
+  <div>
+    <h1>Count: {{ count }}</h1>
+    <button @click="increment">+1</button>
+    <button @click="decrement">-1</button>
+  </div>
+</template>
+
+<script server>
+import { define } from '@ease/core';
+export default define(function() {
+  return {
+    state: { count: 0 },
+    actions: {
+      increment(state) { state.count++; },
+      decrement(state) { state.count--; }
+    }
+  };
+});
+</script>
+
+
+

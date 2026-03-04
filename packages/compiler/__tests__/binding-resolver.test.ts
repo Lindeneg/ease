@@ -116,6 +116,7 @@ describe("resolveBindings — event bindings", () => {
             target: "increment",
             referencedNames: ["increment"],
             nodePath: [0],
+            eventName: "click",
         });
     });
 
@@ -164,6 +165,7 @@ describe("resolveBindings — dynamic attributes", () => {
             expression: "loading",
             target: "loading",
             referencedNames: ["loading"],
+            attrName: "disabled",
         });
     });
 
@@ -194,20 +196,27 @@ describe("resolveBindings — conditional directives", () => {
             expression: "show",
             target: "show",
             referencedNames: ["show"],
+            conditionKind: "if",
         });
     });
 
     it("resolves @else-if to a conditional binding", () => {
         const d = ok(resolve('<div @else-if="loading">loading...</div>', COUNTER_SCRIPT));
-        expect(d.output.bindings[0].type).toBe("conditional");
-        expect(d.output.bindings[0].referencedNames).toEqual(["loading"]);
+        expect(d.output.bindings[0]).toMatchObject({
+            type: "conditional",
+            referencedNames: ["loading"],
+            conditionKind: "else-if",
+        });
     });
 
     it("resolves @else with empty expression and no W303", () => {
         const d = ok(resolve("<div @else>fallback</div>", COUNTER_SCRIPT));
         expect(d.output.bindings).toHaveLength(1);
-        expect(d.output.bindings[0].type).toBe("conditional");
-        expect(d.output.bindings[0].expression).toBe("");
+        expect(d.output.bindings[0]).toMatchObject({
+            type: "conditional",
+            expression: "",
+            conditionKind: "else",
+        });
         expect(d.diagnostics.some((diag) => diag.code === ResolverDiagnostics.W303)).toBe(false);
     });
 
@@ -228,6 +237,8 @@ describe("resolveBindings — loop directives", () => {
             expression: "item in items",
             target: "items",
             referencedNames: ["items"],
+            loopVariable: "item",
+            loopIterable: "items",
         });
     });
 
@@ -448,9 +459,13 @@ export default define(function() {
         ));
         const binding = d.output.bindings.find(b => b.type === "component-event");
         expect(binding).toBeDefined();
-        expect(binding!.target).toBe("handleChildChange");
-        expect(binding!.expression).toBe("handleChildChange");
-        expect(binding!.referencedNames).toEqual(["handleChildChange"]);
+        expect(binding!).toMatchObject({
+            type: "component-event",
+            target: "handleChildChange",
+            expression: "handleChildChange",
+            referencedNames: ["handleChildChange"],
+            eventName: "change",
+        });
     });
 
     it("resolves @click on native element as regular event binding", () => {

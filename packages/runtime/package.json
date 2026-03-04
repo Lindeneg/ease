@@ -12,12 +12,10 @@
     }
   },
   "scripts": {
-    "build": "tsc --build"
+    "build": "tsc --build",
+    "test": "vitest run"
   },
   "files": [
     "dist"
-  ],
-  "dependencies": {
-    "@ease/core": "0.0.1"
-  }
+  ]
 }

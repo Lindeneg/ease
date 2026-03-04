@@ -25,6 +25,16 @@ export interface Binding {
     referencedNames: string[];
     /** Index path through the template AST to the node containing this binding */
     nodePath: number[];
+    /** DOM event name for "event"/"component-event" bindings, e.g. "click", "submit", "change" */
+    eventName?: string;
+    /** HTML attribute name for "attr" bindings, e.g. "class", "disabled", "href" */
+    attrName?: string;
+    /** Condition directive kind for "conditional" bindings: "if", "else-if", or "else" */
+    conditionKind?: string;
+    /** Loop variable name for "loop" bindings, e.g. "item" from `item in items` */
+    loopVariable?: string;
+    /** Loop iterable expression for "loop" bindings, e.g. "items" from `item in items` */
+    loopIterable?: string;
 }
 
 /** A fully resolved component: template AST, script analysis, and the bindings between them. */
@@ -192,6 +202,7 @@ function resolveEventDirective(
         target: actionName,
         referencedNames: [actionName],
         nodePath,
+        eventName: directiveName,
     });
 }
 
@@ -225,6 +236,7 @@ function resolveComponentEventDirective(
         target: actionName,
         referencedNames: [actionName],
         nodePath,
+        eventName: directiveName,
     });
 }
 
@@ -253,6 +265,7 @@ function resolveConditionalDirective(
             target: "",
             referencedNames: [],
             nodePath,
+            conditionKind: directiveName,
         });
         return;
     }
@@ -266,6 +279,7 @@ function resolveConditionalDirective(
         target: names[0] ?? expr,
         referencedNames: names,
         nodePath,
+        conditionKind: directiveName,
     });
 }
 
@@ -301,6 +315,8 @@ function resolveLoopDirective(value: string, nodePath: number[], ctx: WalkContex
         target: iterableNames[0] ?? parsed.iterable,
         referencedNames: iterableNames,
         nodePath,
+        loopVariable: parsed.variable,
+        loopIterable: parsed.iterable,
     });
 
     // Scope the loop variable for children
@@ -331,6 +347,7 @@ function resolveDynamicAttr(
             target: "",
             referencedNames: [],
             nodePath,
+            attrName,
         });
         return;
     }
@@ -344,6 +361,7 @@ function resolveDynamicAttr(
         target: names[0] ?? expr,
         referencedNames: names,
         nodePath,
+        attrName,
     });
 }
 

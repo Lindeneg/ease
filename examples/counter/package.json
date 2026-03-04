@@ -1,0 +1,15 @@
+{
+  "name": "@ease/example-counter",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.js",
+    "start": "node server.js",
+    "dev": "node build.js && node server.js"
+  },
+  "dependencies": {
+    "@ease/compiler": "0.0.1",
+    "@ease/runtime": "0.0.1"
+  }
+}

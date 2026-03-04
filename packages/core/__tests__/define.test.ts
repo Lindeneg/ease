@@ -1,6 +1,6 @@
 import { describe, it, expect, expectTypeOf, assertType } from "vitest";
 import { define } from "../src/index.js";
-import type { ComponentDef, DefinedComponent, EmitFn } from "../src/index.js";
+import type { ComponentDef, DefinedComponent, EmitFn, ServerContext } from "../src/index.js";
 
 describe("define()", () => {
   it("returns a DefinedComponent wrapping the factory", () => {
@@ -153,5 +153,50 @@ describe("define() with emits", () => {
     const emitFn: EmitFn = (_event, ..._payload) => {};
     expectTypeOf(emitFn).toBeFunction();
     expectTypeOf(emitFn).parameters.toMatchTypeOf<[string, ...any[]]>();
+  });
+});
+
+describe("define() with ctx parameter", () => {
+  it("factory can receive ctx as second argument", () => {
+    const component = define(function (props: { id: string }, ctx) {
+      return {
+        state: { id: props.id, user: ctx?.user },
+        actions: {},
+      };
+    });
+
+    const def = component.factory({ id: "123" }, {
+      request: {},
+      params: { id: "123" },
+      query: {},
+      user: { name: "Ada" },
+    });
+    expect(def.state.id).toBe("123");
+    expect(def.state.user).toEqual({ name: "Ada" });
+  });
+
+  it("ctx is optional — factory works without it", () => {
+    const component = define(function (props: { x: number }) {
+      return {
+        state: { value: props.x },
+        actions: {},
+      };
+    });
+
+    const def = component.factory({ x: 42 });
+    expect(def.state.value).toBe(42);
+  });
+
+  it("ServerContext allows arbitrary middleware fields", () => {
+    const ctx: ServerContext = {
+      request: {},
+      params: {},
+      query: {},
+      user: { name: "Ada" },
+      db: { query: () => {} },
+      permissions: ["read", "write"],
+    };
+    expect(ctx.user).toEqual({ name: "Ada" });
+    expect(ctx.permissions).toEqual(["read", "write"]);
   });
 });

@@ -5,11 +5,12 @@
     "packages/shared",
     "packages/core",
     "packages/compiler",
-    "packages/runtime"
+    "packages/runtime",
+    "examples/counter"
   ],
   "scripts": {
     "build": "npm run build -w packages/shared -w packages/core -w packages/compiler -w packages/runtime",
-    "test": "npm test -w packages/core -w packages/compiler"
+    "test": "npm test -w packages/core -w packages/compiler -w packages/runtime"
   },
   "devDependencies": {
     "typescript": "5.9.3",
